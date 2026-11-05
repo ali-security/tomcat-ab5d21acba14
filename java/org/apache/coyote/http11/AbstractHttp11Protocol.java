@@ -129,6 +129,11 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
     }
 
 
+    public boolean checkSni(String sniHostName, String protocolHostName) {
+        return getEndpoint().checkSni(sniHostName, protocolHostName);
+    }
+
+
     // ------------------------------------------------ HTTP specific properties
     // ------------------------------------------ managed in the ProtocolHandler
 
