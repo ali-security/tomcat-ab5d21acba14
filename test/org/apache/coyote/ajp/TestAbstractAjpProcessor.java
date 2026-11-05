@@ -569,6 +569,75 @@ public class TestAbstractAjpProcessor extends TomcatBaseTest {
     }
 
     @Test
+    public void testSecretNearMiss() throws Exception {
+        doTestSecret("RIGHTSECRET", new String[] { "RIGHTSECRES", "SIGHTSECRET", "RIGHTSECRE", "RIGHTSECRETX", "R",
+                "rightsecret", "RIGHTSECRETRIGHTSECRET" }, "RIGHTSECRET");
+    }
+
+    @Test
+    public void testSecretNonAscii() throws Exception {
+        // Secret bytes >= 0x80 (ISO-8859-1) must be compared as unsigned values
+        doTestSecret("S\u00e9CR\u00e8T\u00ff",
+                new String[] { "S\u00e9CR\u00e8T\u00fe", "SeCReT\u00ff", "S\u00e9CR\u00e8T" }, "S\u00e9CR\u00e8T\u00ff");
+    }
+
+    private void doTestSecret(String secret, String[] wrongSecrets, String rightSecret) throws Exception {
+        Tomcat tomcat = getTomcatInstance();
+        Assert.assertTrue(tomcat.getConnector().setProperty("secret", secret));
+        tomcat.start();
+
+        // No file system docBase required
+        Context ctx = getProgrammaticRootContext();
+
+        Tomcat.addServlet(ctx, "helloWorld", new HelloWorldServlet());
+        ctx.addServletMappingDecoded("/", "helloWorld");
+
+        StringManager smClient = StringManager.getManager("org.apache.catalina.valves");
+        String expectedBody = "<p><b>" + smClient.getString("errorReportValve.type") + "</b> " +
+                smClient.getString("errorReportValve.statusReport") + "</p>";
+
+        SimpleAjpClient ajpClient = new SimpleAjpClient();
+
+        ajpClient.setPort(getPort());
+
+        TesterAjpMessage forwardMessage;
+        TesterAjpMessage responseHeaders;
+        TesterAjpMessage responseBody;
+
+        for (String wrongSecret : wrongSecrets) {
+            ajpClient.connect();
+            validateCpong(ajpClient.cping());
+
+            forwardMessage = ajpClient.createForwardMessage();
+            forwardMessage.addAttribute(0x0C, wrongSecret);
+            forwardMessage.end();
+
+            responseHeaders = ajpClient.sendMessage(forwardMessage);
+            // Expect 3 packets: headers, body, end
+            validateResponseHeaders(responseHeaders, 403, "403");
+            responseBody = ajpClient.readMessage();
+            validateResponseBody(responseBody, expectedBody);
+            validateResponseEnd(ajpClient.readMessage(), false);
+        }
+
+        ajpClient.connect();
+        validateCpong(ajpClient.cping());
+
+        forwardMessage = ajpClient.createForwardMessage();
+        forwardMessage.addAttribute(0x0C, rightSecret);
+        forwardMessage.end();
+
+        responseHeaders = ajpClient.sendMessage(forwardMessage);
+        // Expect 3 packets: headers, body, end
+        validateResponseHeaders(responseHeaders, 200, "200");
+        responseBody = ajpClient.readMessage();
+        validateResponseBody(responseBody, HelloWorldServlet.RESPONSE_TEXT);
+        validateResponseEnd(ajpClient.readMessage(), true);
+
+        ajpClient.disconnect();
+    }
+
+    @Test
     public void testKeepAlive() throws Exception {
         Tomcat tomcat = getTomcatInstance();
         Assert.assertTrue(tomcat.getConnector().setProperty("connectionTimeout", "-1"));
