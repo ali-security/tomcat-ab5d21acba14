@@ -306,6 +306,16 @@ public class openssl_h {
         return X509_V_ERR_OCSP_HAS_EXPIRED;
     }
 
+    private static final int X509_V_ERR_UNABLE_TO_GET_CRL = (int) 3L;
+
+    /**
+     * {@snippet lang = c : * #define X509_V_ERR_UNABLE_TO_GET_CRL 3
+     * }
+     */
+    public static int X509_V_ERR_UNABLE_TO_GET_CRL() {
+        return X509_V_ERR_UNABLE_TO_GET_CRL;
+    }
+
     private static final int X509_V_FLAG_CRL_CHECK = (int) 4L;
 
     /**
