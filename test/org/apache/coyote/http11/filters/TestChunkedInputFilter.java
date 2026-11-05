@@ -1021,4 +1021,95 @@ public class TestChunkedInputFilter extends TomcatBaseTest {
          */
         Assert.assertEquals("5,4", client.getResponseBody());
     }
+
+
+    @Test
+    public void testExtension01() throws Exception {
+        doTestExtension("abc", true);
+    }
+
+
+    @Test
+    public void testExtension02() throws Exception {
+        doTestExtension("abc=def", true);
+    }
+
+
+    @Test
+    public void testExtension03() throws Exception {
+        doTestExtension(" a = b ", true);
+    }
+
+
+    @Test
+    public void testExtension04() throws Exception {
+        doTestExtension(" a = \"b\" ", true);
+    }
+
+
+    @Test
+    public void testExtension05() throws Exception {
+        doTestExtension("a=b=c", false);
+    }
+
+
+    @Test
+    public void testExtension06() throws Exception {
+        doTestExtension("a=b;", false);
+    }
+
+
+    @Test
+    public void testExtension07() throws Exception {
+        doTestExtension("a=\"aa\r\n\"", false);
+    }
+
+
+    private void doTestExtension(String extension, boolean ok) throws Exception {
+        // Setup Tomcat instance
+        Tomcat tomcat = getTomcatInstance();
+
+        Assert.assertTrue(tomcat.getConnector().setProperty(
+                "maxExtensionSize", Integer.toString(EXT_SIZE_LIMIT)));
+
+        // No file system docBase required
+        Context ctx = getProgrammaticRootContext();
+
+        Tomcat.addServlet(ctx, "servlet", new EchoHeaderServlet(ok));
+        ctx.addServletMappingDecoded("/", "servlet");
+
+        tomcat.start();
+
+        // @formatter:off
+        String[] request = new String[] {
+                "POST /echo-params.jsp HTTP/1.1" + SimpleHttpClient.CRLF +
+                    "Host: any" + SimpleHttpClient.CRLF +
+                    "Transfer-encoding: chunked" + SimpleHttpClient.CRLF +
+                    SimpleHttpClient.HTTP_HEADER_CONTENT_TYPE_FORM_URL_ENCODING +
+                    "Connection: close" + SimpleHttpClient.CRLF +
+                    SimpleHttpClient.CRLF +
+                    "3;" + extension + SimpleHttpClient.CRLF +
+                    "a=0" + SimpleHttpClient.CRLF +
+                    "4" + SimpleHttpClient.CRLF +
+                    "&b=1" + SimpleHttpClient.CRLF +
+                    "0" + SimpleHttpClient.CRLF +
+                    SimpleHttpClient.CRLF
+        };
+        // @formatter:on
+
+        TrailerClient client =
+                new TrailerClient(tomcat.getConnector().getLocalPort());
+        client.setRequest(request);
+
+        client.connect();
+        client.processRequest();
+
+        if (ok) {
+            Assert.assertTrue(client.isResponse200());
+        } else {
+            Assert.assertTrue(client.isResponse500());
+        }
+    }
+
+
 }
