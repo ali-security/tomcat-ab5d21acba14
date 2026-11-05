@@ -485,10 +485,6 @@ public class OpenSSLContext implements org.apache.tomcat.util.net.SSLContext {
             // Set certificate chain file
             SSLContext.setCertificateChainFile(ctx,
                     SSLHostConfig.adjustRelativePath(certificate.getCertificateChainFile()), false);
-            // Set revocation
-            SSLContext.setCARevocation(ctx,
-                    SSLHostConfig.adjustRelativePath(sslHostConfig.getCertificateRevocationListFile()),
-                    SSLHostConfig.adjustRelativePath(sslHostConfig.getCertificateRevocationListPath()));
         } else {
             String alias = certificate.getCertificateKeyAlias();
             X509KeyManager x509KeyManager = certificate.getCertificateKeyManager();
@@ -510,6 +506,10 @@ public class OpenSSLContext implements org.apache.tomcat.util.net.SSLContext {
                 SSLContext.addChainCertificateRaw(ctx, chain[i].getEncoded());
             }
         }
+        // Set revocation
+        SSLContext.setCARevocation(ctx,
+                SSLHostConfig.adjustRelativePath(sslHostConfig.getCertificateRevocationListFile()),
+                SSLHostConfig.adjustRelativePath(sslHostConfig.getCertificateRevocationListPath()));
     }
 
 
