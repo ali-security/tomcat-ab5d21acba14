@@ -13,12 +13,12 @@
 name: Smoke Test
 
 on:
-  push:
-    branches:
-      - 9.0.x
-  pull_request:
-    branches:
-      - 9.0.x
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional test class name (or Ant glob) to run in Full_Tests instead of the full partition, e.g. TestRequest'
+        required: false
+        default: ''
 
 env:
   LC_ALL: en_US.UTF-8
@@ -34,6 +34,7 @@ jobs:
         os: [ ubuntu-latest ]
     name: JDK${{ matrix.java }} ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
     - name: Git Checkout
       uses: actions/checkout@v4
@@ -42,11 +43,78 @@ jobs:
       with:
         java-version: ${{ matrix.java }}
         distribution: zulu
+    - name: Build tomcat-native (APR connector tests)
+      run: |
+        set -euxo pipefail
+        sudo apt-get update -q
+        sudo apt-get install -y -q libapr1-dev libssl-dev
+        TCN_VER=$(sed -n 's/^tomcat-native.version=//p' build.properties.default)
+        TCN_SHA=$(sed -n 's/^tomcat-native.src.checksum.value=//p' build.properties.default)
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o tcn.tar.gz "https://archive.apache.org/dist/tomcat/tomcat-connectors/native/${TCN_VER}/source/tomcat-native-${TCN_VER}-src.tar.gz"
+        echo "${TCN_SHA}  tcn.tar.gz" | sha512sum -c -
+        tar xzf tcn.tar.gz
+        cd "tomcat-native-${TCN_VER}-src/native"
+        ./configure --with-apr=/usr/bin/apr-1-config --with-java-home="$JAVA_HOME" --with-ssl=/usr --prefix="$RUNNER_TEMP/tcnative"
+        make -j"$(nproc)"
+        make install
+        ls -l "$RUNNER_TEMP/tcnative/lib"
     - name: Build
       run: |
         ant -noinput echoproperties deploy embed test-nio test-status
       env:
-        ANT_OPTS: -Dtest.openssl.exists=false -Dtest.excludePerformance=true -Dtest.exclude=javax/servlet/http/TestHttpServletResponseSendError.java,org/apache/catalina/authenticator/TestFormAuthenticatorA.java,org/apache/catalina/authenticator/TestFormAuthenticatorB.java,org/apache/catalina/authenticator/TestFormAuthenticatorC.java,org/apache/catalina/authenticator/TestSSOnonLoginAndBasicAuthenticator.java,org/apache/catalina/authenticator/TestSSOnonLoginAndDigestAuthenticator.java,org/apache/catalina/core/TestAsyncContextImpl.java,org/apache/catalina/core/TestAsyncContextStateChanges.java,org/apache/catalina/core/TestStandardContextResources.java,org/apache/catalina/core/TestStandardWrapper.java,org/apache/catalina/loader/TestVirtualContext.java,org/apache/catalina/mapper/TestMapperWebapps.java,org/apache/catalina/nonblocking/TestNonBlockingAPI.java,org/apache/catalina/servlets/TestDefaultServletEncodingPassThroughBom.java,org/apache/catalina/servlets/TestDefaultServletEncodingWithBom.java,org/apache/catalina/servlets/TestDefaultServletEncodingWithoutBom.java,org/apache/catalina/servlets/TestDefaultServletIfMatchRequests.java,org/apache/catalina/servlets/TestDefaultServlet.java,org/apache/catalina/servlets/TestDefaultServletOptions.java,org/apache/catalina/servlets/TestWebdavServletOptionsFile.java,org/apache/catalina/startup/TestContextConfig.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentA.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentB.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentC.java,org/apache/catalina/valves/rewrite/TestRewriteValve.java,org/apache/catalina/valves/TestStuckThreadDetectionValve.java,org/apache/coyote/ajp/TestAbstractAjpProcessor.java,org/apache/coyote/http11/filters/TestChunkedInputFilter.java,org/apache/coyote/http11/TestHttp11InputBufferCRLF.java,org/apache/coyote/http11/TestHttp11InputBuffer.java,org/apache/coyote/http11/TestHttp11Processor.java,org/apache/coyote/http2/TestAsync.java,org/apache/coyote/http2/TestHttp2ConnectionTimeouts.java,org/apache/coyote/http2/TestHttp2Limits.java,org/apache/coyote/http2/TestHttp2Section_6_8.java,org/apache/coyote/http2/TestHttp2Timeouts.java,org/apache/coyote/http2/TestStreamQueryString.java,org/apache/el/TestELInJsp.java,org/apache/jasper/compiler/TestCompiler.java,org/apache/jasper/compiler/TestEncodingDetector.java,org/apache/jasper/compiler/TestGenerator.java,org/apache/jasper/compiler/TestJspConfig.java,org/apache/jasper/compiler/TestJspDocumentParser.java,org/apache/jasper/compiler/TestValidator.java,org/apache/jasper/optimizations/TestELInterpreterTagSetters.java,org/apache/jasper/optimizations/TestStringInterpreterTagSetters.java,org/apache/jasper/runtime/TestCustomHttpJspPage.java,org/apache/jasper/runtime/TestJspContextWrapper.java,org/apache/jasper/runtime/TestJspRuntimeLibrary.java,org/apache/jasper/runtime/TestPageContextImpl.java,org/apache/jasper/servlet/TestTldScanner.java,org/apache/naming/resources/TestWarDirContext.java,org/apache/naming/TestEnvEntry.java,org/apache/tomcat/util/net/TestClientCert.java,org/apache/tomcat/util/net/TestCustomSslTrustManager.java,org/apache/tomcat/util/net/TestSSLHostConfigCompat.java,org/apache/tomcat/util/net/TestSsl.java,org/apache/tomcat/websocket/server/TestSlowClient.java,org/apache/tomcat/websocket/server/TestWsRemoteEndpointImplServerDeadlock.java,org/apache/tomcat/websocket/TestWebSocketFrameClientSSL.java,org/apache/tomcat/websocket/TestWsWebSocketContainer.java,org/apache/tomcat/websocket/TestWsWebSocketContainerTimeoutServer.java,org/apache/catalina/tribes/group/interceptors/TestTcpFailureDetector.java,org/apache/catalina/filters/TestRateLimitFilter.java,javax/servlet/http/TestHttpServletDoHeadInvalidWrite*.java,javax/servlet/http/TestHttpServletDoHeadValidWrite*.java
+        ANT_OPTS: -Dtest.apr.loc=${{ runner.temp }}/tcnative/lib -Dtest.threads=4 -Dtest.openssl.exists=false -Dtest.excludePerformance=true -Dtest.exclude=javax/servlet/http/TestHttpServletResponseSendError.java,org/apache/catalina/authenticator/TestFormAuthenticatorA.java,org/apache/catalina/authenticator/TestFormAuthenticatorB.java,org/apache/catalina/authenticator/TestFormAuthenticatorC.java,org/apache/catalina/authenticator/TestSSOnonLoginAndBasicAuthenticator.java,org/apache/catalina/authenticator/TestSSOnonLoginAndDigestAuthenticator.java,org/apache/catalina/core/TestAsyncContextImpl.java,org/apache/catalina/core/TestAsyncContextStateChanges.java,org/apache/catalina/core/TestStandardContextResources.java,org/apache/catalina/core/TestStandardWrapper.java,org/apache/catalina/loader/TestVirtualContext.java,org/apache/catalina/mapper/TestMapperWebapps.java,org/apache/catalina/nonblocking/TestNonBlockingAPI.java,org/apache/catalina/servlets/TestDefaultServletEncodingPassThroughBom.java,org/apache/catalina/servlets/TestDefaultServletEncodingWithBom.java,org/apache/catalina/servlets/TestDefaultServletEncodingWithoutBom.java,org/apache/catalina/servlets/TestDefaultServletIfMatchRequests.java,org/apache/catalina/servlets/TestDefaultServlet.java,org/apache/catalina/servlets/TestDefaultServletOptions.java,org/apache/catalina/servlets/TestWebdavServletOptionsFile.java,org/apache/catalina/startup/TestContextConfig.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentA.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentB.java,org/apache/catalina/startup/TestHostConfigAutomaticDeploymentC.java,org/apache/catalina/valves/rewrite/TestRewriteValve.java,org/apache/catalina/valves/TestStuckThreadDetectionValve.java,org/apache/coyote/ajp/TestAbstractAjpProcessor.java,org/apache/coyote/http11/filters/TestChunkedInputFilter.java,org/apache/coyote/http11/TestHttp11InputBufferCRLF.java,org/apache/coyote/http11/TestHttp11InputBuffer.java,org/apache/coyote/http11/TestHttp11Processor.java,org/apache/coyote/http2/TestAsync.java,org/apache/coyote/http2/TestHttp2ConnectionTimeouts.java,org/apache/coyote/http2/TestHttp2Limits.java,org/apache/coyote/http2/TestHttp2Section_6_8.java,org/apache/coyote/http2/TestHttp2Timeouts.java,org/apache/coyote/http2/TestStreamQueryString.java,org/apache/el/TestELInJsp.java,org/apache/jasper/compiler/TestCompiler.java,org/apache/jasper/compiler/TestEncodingDetector.java,org/apache/jasper/compiler/TestGenerator.java,org/apache/jasper/compiler/TestJspConfig.java,org/apache/jasper/compiler/TestJspDocumentParser.java,org/apache/jasper/compiler/TestValidator.java,org/apache/jasper/optimizations/TestELInterpreterTagSetters.java,org/apache/jasper/optimizations/TestStringInterpreterTagSetters.java,org/apache/jasper/runtime/TestCustomHttpJspPage.java,org/apache/jasper/runtime/TestJspContextWrapper.java,org/apache/jasper/runtime/TestJspRuntimeLibrary.java,org/apache/jasper/runtime/TestPageContextImpl.java,org/apache/jasper/servlet/TestTldScanner.java,org/apache/naming/resources/TestWarDirContext.java,org/apache/naming/TestEnvEntry.java,org/apache/tomcat/util/net/TestClientCert.java,org/apache/tomcat/util/net/TestCustomSslTrustManager.java,org/apache/tomcat/util/net/TestSSLHostConfigCompat.java,org/apache/tomcat/util/net/TestSsl.java,org/apache/tomcat/websocket/server/TestSlowClient.java,org/apache/tomcat/websocket/server/TestWsRemoteEndpointImplServerDeadlock.java,org/apache/tomcat/websocket/TestWebSocketFrameClientSSL.java,org/apache/tomcat/websocket/TestWsWebSocketContainer.java,org/apache/tomcat/websocket/TestWsWebSocketContainerTimeoutServer.java,org/apache/catalina/tribes/group/interceptors/TestTcpFailureDetector.java,org/apache/catalina/filters/TestRateLimitFilter.java,javax/servlet/http/TestHttpServletDoHeadInvalidWrite*.java,javax/servlet/http/TestHttpServletDoHeadValidWrite*.java
+
+    - name: Test summary (totals and skip reasons)
+      if: ${{ !cancelled() }}
+      run: |
+        set -u
+        shopt -s nullglob
+        files=(output/build/logs/TEST-*.txt)
+        echo "Test report files: ${#files[@]}"
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "No test reports found"
+          exit 1
+        fi
+        JVER=$(java -version 2>&1 | head -1)
+        awk '
+          /^Testsuite: / { suite=$2 }
+          /^Tests run: / {
+            gsub(",", "", $0); split($0, a, " ")
+            run+=a[3]; fail+=a[5]; err+=a[7]; skip+=a[9]; suites++
+          }
+          /^Testcase: / { tc=$2 }
+          /^[ \t]*SKIPPED/ {
+            msg=$0; sub(/^[ \t]*SKIPPED:?[ \t]*/, "", msg)
+            if (msg == "") msg = "(no message)"
+            printf "SKIPROW\t%s\t%s\t%s\n", suite, tc, msg
+          }
+          END {
+            printf "TOTAL: suites=%d tests=%d passed=%d failures=%d errors=%d skipped=%d\n", suites, run, run-fail-err-skip, fail, err, skip
+          }' "${files[@]}" > "$RUNNER_TEMP/summary.txt"
+        # One line per skipped test: the runner message plus the JUnit Assume statement
+        # (from the test method's source) that caused the skip, explained in plain words.
+        while IFS=$'\t' read -r _ suite tc msg; do
+          f="test/$(echo "$suite" | tr . /).java"
+          src=""
+          if [ -f "$f" ]; then
+            src=$(awk -v m="$tc" '
+              $0 ~ ("void " m "\\(") { inm=1 }
+              inm && /Assume\.|assume[A-Z][a-zA-Z]*\(/ { gsub(/^[ \t]+/, ""); printf "%s:%d: %s", FILENAME, NR, $0; exit }
+            ' "$f")
+            if [ -z "$src" ]; then
+              src=$(grep -n -m1 -E 'Assume\.|assume[A-Z][a-zA-Z]*\(' "$f" | sed -e "s|^|$f:|" -e 's/:[ \t]*/: /2')
+            fi
+          fi
+          why=""
+          case "$src" in
+            *assumeFalse*isJre9Available*) why="test applies only to Java 8 and earlier runtimes (assumes JreCompat.isJre9Available() is false); this leg runs ${JVER}, so JUnit skips it by design" ;;
+            *assumeTrue*isJre*Available*) why="test needs a newer Java runtime than this leg provides (${JVER})" ;;
+          esac
+          echo "SKIPPED ${suite}#${tc} -- reason: ${why:-see assumption} -- runner message: ${msg} -- assumption source: ${src:-n/a}"
+        done < <(awk '/^SKIPROW/' "$RUNNER_TEMP/summary.txt")
+        grep '^TOTAL:' "$RUNNER_TEMP/summary.txt"
+        echo "Test summary complete"
 
     - name: Upload logs
       if: ${{ !cancelled() }}
@@ -57,3 +125,144 @@ jobs:
           hs_err_*.log
           output/build/logs/TEST*.txt
         retention-days: 7
+
+  Release_Jar:
+    name: Release jar (tomcat-embed-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v4
+    - name: Set up Java (release JDK 25)
+      uses: actions/setup-java@v4
+      with:
+        java-version: 25
+        distribution: temurin
+    - name: Build embed jars
+      run: |
+        set -euxo pipefail
+        ant -version
+        java -version
+        ant -noinput -Drelease.java.version=99 embed-jars
+        VER=$(sed -n 's/^version.major=//p' build.properties.default).$(sed -n 's/^version.minor=//p' build.properties.default).$(sed -n 's/^version.build=//p' build.properties.default)
+        mkdir -p seal-dist
+        cp output/embed/tomcat-embed-core.jar "seal-dist/tomcat-embed-core-${VER}.jar"
+        ls -l seal-dist
+    - name: Upload jar
+      uses: actions/upload-artifact@v4
+      with:
+        name: tomcat-embed-core-jar
+        path: seal-dist/tomcat-embed-core-*.jar
+        if-no-files-found: error
+
+  Full_Tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: catalina
+            name: 'org/apache/catalina/**/Test*.java'
+            exclude: ''
+          - leg: coyote
+            name: 'org/apache/coyote/**/Test*.java'
+            exclude: ''
+          - leg: tomcat
+            name: 'org/apache/tomcat/**/Test*.java'
+            exclude: ''
+          - leg: other
+            name: '**/Test*.java'
+            exclude: 'org/apache/catalina/**,org/apache/coyote/**,org/apache/tomcat/**'
+    name: Full tests NIO (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v4
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        java-version: 25
+        distribution: temurin
+    - name: Build tomcat-native (APR connector tests)
+      run: |
+        set -euxo pipefail
+        sudo apt-get update -q
+        sudo apt-get install -y -q libapr1-dev libssl-dev
+        TCN_VER=$(sed -n 's/^tomcat-native.version=//p' build.properties.default)
+        TCN_SHA=$(sed -n 's/^tomcat-native.src.checksum.value=//p' build.properties.default)
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o tcn.tar.gz "https://archive.apache.org/dist/tomcat/tomcat-connectors/native/${TCN_VER}/source/tomcat-native-${TCN_VER}-src.tar.gz"
+        echo "${TCN_SHA}  tcn.tar.gz" | sha512sum -c -
+        tar xzf tcn.tar.gz
+        cd "tomcat-native-${TCN_VER}-src/native"
+        ./configure --with-apr=/usr/bin/apr-1-config --with-java-home="$JAVA_HOME" --with-ssl=/usr --prefix="$RUNNER_TEMP/tcnative"
+        make -j"$(nproc)"
+        make install
+        ls -l "$RUNNER_TEMP/tcnative/lib"
+    - name: Run tests
+      env:
+        TEST_FILTER: ${{ inputs.test-filter }}
+        LEG_NAME: ${{ matrix.name }}
+        LEG_EXCLUDE: ${{ matrix.exclude }}
+      run: |
+        set -euxo pipefail
+        if [ -n "${TEST_FILTER}" ]; then
+          NAME="**/${TEST_FILTER}.java"
+          EXCL="${LEG_EXCLUDE}"
+        else
+          NAME="${LEG_NAME}"
+          EXCL="${LEG_EXCLUDE}"
+        fi
+        EXTRA=()
+        if [ -n "${EXCL}" ]; then EXTRA+=("-Dtest.exclude=${EXCL}"); fi
+        ant -noinput test-nio "-Dtest.name=${NAME}" "${EXTRA[@]}" -Dtest.threads=4 -Dtest.excludePerformance=true "-Dtest.apr.loc=${RUNNER_TEMP}/tcnative/lib" test-status
+    - name: Test summary (totals and skip reasons)
+      if: ${{ !cancelled() }}
+      run: |
+        set -u
+        shopt -s nullglob
+        files=(output/build/logs/TEST-*.txt)
+        echo "Test report files: ${#files[@]}"
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "No test reports found"
+          exit 1
+        fi
+        JVER=$(java -version 2>&1 | head -1)
+        awk '
+          /^Testsuite: / { suite=$2 }
+          /^Tests run: / {
+            gsub(",", "", $0); split($0, a, " ")
+            run+=a[3]; fail+=a[5]; err+=a[7]; skip+=a[9]; suites++
+          }
+          /^Testcase: / { tc=$2 }
+          /^[ \t]*SKIPPED/ {
+            msg=$0; sub(/^[ \t]*SKIPPED:?[ \t]*/, "", msg)
+            if (msg == "") msg = "(no message)"
+            printf "SKIPROW\t%s\t%s\t%s\n", suite, tc, msg
+          }
+          END {
+            printf "TOTAL: suites=%d tests=%d passed=%d failures=%d errors=%d skipped=%d\n", suites, run, run-fail-err-skip, fail, err, skip
+          }' "${files[@]}" > "$RUNNER_TEMP/summary.txt"
+        # One line per skipped test: the runner message plus the JUnit Assume statement
+        # (from the test method's source) that caused the skip, explained in plain words.
+        while IFS=$'\t' read -r _ suite tc msg; do
+          f="test/$(echo "$suite" | tr . /).java"
+          src=""
+          if [ -f "$f" ]; then
+            src=$(awk -v m="$tc" '
+              $0 ~ ("void " m "\\(") { inm=1 }
+              inm && /Assume\.|assume[A-Z][a-zA-Z]*\(/ { gsub(/^[ \t]+/, ""); printf "%s:%d: %s", FILENAME, NR, $0; exit }
+            ' "$f")
+            if [ -z "$src" ]; then
+              src=$(grep -n -m1 -E 'Assume\.|assume[A-Z][a-zA-Z]*\(' "$f" | sed -e "s|^|$f:|" -e 's/:[ \t]*/: /2')
+            fi
+          fi
+          why=""
+          case "$src" in
+            *assumeFalse*isJre9Available*) why="test applies only to Java 8 and earlier runtimes (assumes JreCompat.isJre9Available() is false); this leg runs ${JVER}, so JUnit skips it by design" ;;
+            *assumeTrue*isJre*Available*) why="test needs a newer Java runtime than this leg provides (${JVER})" ;;
+          esac
+          echo "SKIPPED ${suite}#${tc} -- reason: ${why:-see assumption} -- runner message: ${msg} -- assumption source: ${src:-n/a}"
+        done < <(awk '/^SKIPROW/' "$RUNNER_TEMP/summary.txt")
+        grep '^TOTAL:' "$RUNNER_TEMP/summary.txt"
+        echo "Test summary complete"
