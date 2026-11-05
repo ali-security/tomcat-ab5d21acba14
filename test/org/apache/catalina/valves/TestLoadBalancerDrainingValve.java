@@ -41,12 +41,35 @@ import org.easymock.IMocksControl;
 public class TestLoadBalancerDrainingValve {
 
     @Parameters(name = "{index}: activation[{0}], validSessionID[{1}], expectInvokeNext[{2}], enableIgnore[{3}], " +
-            "queryString[{4}]")
+            "queryString[{4}], requestURI[{7}]")
     public static Collection<Object[]> parameters() {
 
         String[] jkActivations = new String[] { "ACT", "DIS" };
         Boolean[] booleans = new Boolean[] { Boolean.TRUE, Boolean.FALSE };
         String[] queryStrings = new String[] { null, "foo=bar" };
+        // Pairs of requested URI and the expected redirect location (excluding
+        // any query string)
+        String[][] defaultRequestURIs = new String[][] { { "/test/path", "/test/path" } };
+        // The other request URIs are only meaningful for the draining of a
+        // request with an invalid session
+        String[][] requestURIs = new String[][] {
+                { "/test/path", "/test/path" },
+                // Multiple leading slashes must be collapsed else the redirect
+                // would be to another host
+                { "//test/path", "/test/path" },
+                { "///test/path", "/test/path" },
+                { "//evil.com/path", "/evil.com/path" },
+                { "///evil.com", "/evil.com" },
+                { "//", "/" },
+                // Removing the session ID path parameter must not create
+                // multiple leading slashes
+                { "/;JSESSIONID=x/evil.com", "/evil.com" },
+                { "/;JSESSIONID=x//evil.com/p", "/evil.com/p" },
+                { "//;JSESSIONID=x/evil.com", "/evil.com" },
+                // Only the session ID path parameter should be removed
+                { "/normal/path;JSESSIONID=abc", "/normal/path" },
+                { "/test;JSESSIONID=abc/path", "/test/path" },
+                { "/test;JSESSIONID=abc;foo=bar/path", "/test;foo=bar/path" } };
 
         List<Object[]> parameterSets = new ArrayList<>();
         for (String jkActivation : jkActivations) {
@@ -57,8 +80,12 @@ public class TestLoadBalancerDrainingValve {
                     for (String queryString : queryStrings) {
                         for (Boolean secureRequest : booleans) {
                             for (Boolean secureSessionConfig : booleans) {
-                                parameterSets.add(new Object[] { jkActivation, validSessionId, expectInvokeNext,
-                                        enableIgnore, queryString, secureRequest, secureSessionConfig });
+                                for (String[] requestURI : "DIS".equals(jkActivation) &&
+                                        !validSessionId.booleanValue() ? requestURIs : defaultRequestURIs) {
+                                    parameterSets.add(new Object[] { jkActivation, validSessionId, expectInvokeNext,
+                                            enableIgnore, queryString, secureRequest, secureSessionConfig,
+                                            requestURI[0], requestURI[1] });
+                                }
                             }
                         }
                     }
@@ -90,6 +117,12 @@ public class TestLoadBalancerDrainingValve {
     @Parameter(6)
     public boolean secureSessionConfig;
 
+    @Parameter(7)
+    public String requestURI;
+
+    @Parameter(8)
+    public String expectedRequestURI;
+
 
     @Test
     public void runValve() throws Exception {
@@ -101,7 +134,6 @@ public class TestLoadBalancerDrainingValve {
 
         String sessionCookieName = "JSESSIONID";
         String sessionId = "cafebabe";
-        String requestURI = "/test/path";
         SessionCookieConfig cookieConfig = new CookieConfig();
         cookieConfig.setDomain("example.com");
         cookieConfig.setName(sessionCookieName);
@@ -158,11 +190,11 @@ public class TestLoadBalancerDrainingValve {
                 // These two lines just mean EasyMock.expect(response.addCookie) but for a void method
                 response.addCookie(expectedCookie);
                 EasyMock.expect(ctx.getSessionCookieName()).andReturn(sessionCookieName); // Indirect call
-                String expectedRequestURI = requestURI;
+                String expectedLocation = expectedRequestURI;
                 if (null != queryString) {
-                    expectedRequestURI = expectedRequestURI + '?' + queryString;
+                    expectedLocation = expectedLocation + '?' + queryString;
                 }
-                response.setHeader("Location", expectedRequestURI);
+                response.setHeader("Location", expectedLocation);
                 response.setStatus(307);
             }
         }
